@@ -1,0 +1,371 @@
+
+import numpy;
+import math;
+import csv;
+
+DEBUG = False
+
+class SFHouse:
+    ASSESSED_YEAR=0
+    PROPERTY_LOCATION=1
+    NEIGHBORHOOD_CODE=2
+    NEIGHBORHOOD_CODE_DEFINITION=3
+    BLOCK_LOT=4
+    VOLUME_NUMBER=5
+    CLASS_CODE=6
+    PROPERTY_CLASS_CODE_DEFINITION=7
+    YEAR_PROPERTY_BUILT=8
+    NUMBER_OF_BATHROOMS=9
+    NUMBER_OF_BEDROOMS=10
+    NUMBER_OF_ROOMS=11
+    NUMBER_OF_STORIES=12
+    NUMBER_OF_UNITS=13
+    CHARACTERISTICS_CHANGE_DATE=14
+    ZONING_CODE=15
+    CONSTRUCTION_TYPE=16
+    LOT_DEPTH=17
+    LOT_FRONTAGE=18
+    PROPERTY_AREA_IN_SQUARE_FEET=19
+    BASEMENT_AREA=20
+    LOT_AREA=21
+    LOT_CODE=22
+    PRIOR_SALES_DATE=23
+    RECORDATION_DATE=24
+    DOCUMENT_NUMBER=25
+    DOCUMENT_NUMBER_2=26
+    TAX_RATE_AREA_CODE=27
+    PERCENT_OF_OWNERSHIP=28
+    CLOSED_ROLL_EXEMPTION_TYPE_CODE=29
+    CLOSED_ROLL_EXEMPTION_TYPE_CODE_DEFINITION=30
+    CLOSED_ROLL_STATUS_CODE=31
+    CLOSED_ROLL_MISC_EXEMPTION_VALUE=32
+    CLOSED_ROLL_HOMEOWNER_EXEMPTION_VALUE=33
+    CURRENT_SALES_DATE=34
+    CLOSED_ROLL_ASSESSED_FIXTURES_VALUE=35
+    ASSESSED_IMPROVEMENT_VALUE=36
+    ASSESSED_LAND_VALUE=37
+    CLOSED_ROLL_ASSESSED_PERSONAL_PROP_VALUE=38
+    ZIPCODE_OF_PARCEL=39
+    SUPERVISOR_DISTRICT=40
+    NEIGHBORHOODS_ANALYSIS_BOUNDARIES=41
+    LOCATION=42
+
+    def __init__(self, errors, count, tokens):
+        self.block_lot = tokens[SFHouse.BLOCK_LOT]
+        self.class_code = tokens[SFHouse.CLASS_CODE]
+        self.neighborhood_code = tokens[SFHouse.NEIGHBORHOOD_CODE]
+        self.zipcode = tokens[SFHouse.ZIPCODE_OF_PARCEL]
+
+        self.year = -1
+        self.assessed_improvement_value = 0
+        self.land_value = 0
+        self.units = 0;
+        self.year_built = -1
+        self.bedrooms = 0
+        self.prop_area = 0
+        self.lot_area = 0
+
+        try:
+            self.year = int(tokens[SFHouse.ASSESSED_YEAR])
+            self.assessed_improvement_value = int(tokens[SFHouse.ASSESSED_IMPROVEMENT_VALUE])
+            self.land_value = int(tokens[SFHouse.ASSESSED_LAND_VALUE])
+            self.units = int(tokens[SFHouse.NUMBER_OF_UNITS])
+            self.bedrooms = int(tokens[SFHouse.NUMBER_OF_BEDROOMS])
+            if len(tokens[SFHouse.YEAR_PROPERTY_BUILT]) > 0:
+                self.year_built = int(tokens[SFHouse.YEAR_PROPERTY_BUILT])
+            self.prop_area = float(tokens[SFHouse.PROPERTY_AREA_IN_SQUARE_FEET])
+            self.lot_area = float(tokens[SFHouse.LOT_AREA])
+
+        except ValueError:
+            errors["readerror "+ str(count)] = tokens
+
+        if DEBUG:
+            if len(self.neighborhood_code) == 0:
+                print "Empty neighborhood: imp value [{}] line number [{}] line [{}]".format(self.assessed_improvement_value, count, line)
+
+
+class SFHouses:
+    def __init__(self):
+        self.houses = list()
+        self.cc = {}
+        self.block_lot = {}
+        self.errors = {}
+        self.nc = {}
+        self.landValues = {}
+        self._1950 = { "before1950" : {}, "after1950": {} }
+        self.bu = {}
+
+    def readFile(self, filename):
+        print "Reading file {}".format(filename)
+
+        count = 0
+        with open(filename) as f:
+            reader = csv.reader(f)
+            for line in reader:
+                # skip the header:
+                if count > 0:
+                    house = SFHouse(self.errors, count, line)
+                    self.houses.append(house)
+
+                    if DEBUG:
+                        print "neighborhood {} class code {} improvement value {}, land value".format(house.neighborhood_code,
+                                        house.class_code, house.assessed_improvement_value,
+                                        house.land_value)
+
+                    self.doFrequentClass(house)
+                    self.doAssessedValue(house)
+                    self.doNeighborhoodAssessedValue(house)
+                    self.doLandValues(house)
+                    self.doUnits1950(house)
+                    self.doBedroomsUnits(house)
+
+                count += 1
+                if count % 100000 == 0:
+                    print ".",
+        f.close()
+
+        print "\nCompleted reading {} records - {} errors".format(count, len(self.errors))
+        for k, v in self.errors.iteritems():
+            print "{}: {}".format(k,v)
+
+    def doFrequentClass(self, house):
+        # Q1: most frequent class
+        if house.class_code not in self.cc:
+            self.cc[house.class_code] = 1
+        else:
+            self.cc[house.class_code] = self.cc[house.class_code] + 1
+
+    def doAssessedValue(self, house):
+        # Q2: assessed value:
+        if house.assessed_improvement_value > 0:
+            if house.block_lot not in self.block_lot:
+                self.block_lot[house.block_lot] = house
+            else:
+                old_house = self.block_lot[house.block_lot]
+                if house.year > old_house.year:
+                    self.block_lot[house.block_lot] = house
+
+    def doNeighborhoodAssessedValue(self, house):
+        # Q3: Neighborhood assessed value:
+        if house.assessed_improvement_value > 0 and len(house.neighborhood_code) > 0:
+            # if this is the first house in this neighborhood, create the dictionary:
+            if house.neighborhood_code not in self.nc:
+                self.nc[house.neighborhood_code] = {}
+            this_nc = self.nc[house.neighborhood_code]
+
+            # now install this house inside the neighborhood dictionary:
+            if house.block_lot not in this_nc:
+                this_nc[house.block_lot] = house
+            else:
+                old_house = this_nc[house.block_lot]
+                if house.year > old_house.year:
+                    this_nc[house.block_lot] = house
+
+    def doLandValues(self, house):
+        if house.year not in self.landValues:
+            self.landValues[house.year] = [0,0]
+        if house.land_value > 0:
+            current = self.landValues[house.year]
+            current[0] += house.land_value
+            current[1] += 1
+
+    def doUnits1950(self, house):
+        # error check:
+        if house.year_built < 1776 or house.year_built > 2015:
+            if house.year_built != -1:
+                if "year_built_errors" not in self.errors:
+                    self.errors["year_built_errors"] = 1
+                else:
+                    self.errors["year_built_errors"] = self.errors["year_built_errors"] + 1
+            return
+
+        houses = self._1950["before1950"] if house.year_built <= 1950 else self._1950["after1950"]
+
+        if house.block_lot not in houses:
+            houses[ house.block_lot ] = house
+        else:
+            # get the earliest record (this may have zero units that we should skip!
+            old_house = houses[house.block_lot]
+            if house.year < old_house.year:
+                houses[house.block_lot] = house
+
+
+    def doBedroomsUnits(self, house):
+        if house.zipcode not in self.bu:
+            self.bu[house.zipcode] = {}
+        thisZC = self.bu[house.zipcode]
+        if house.block_lot not in thisZC:
+            thisZC[house.block_lot] = house
+        else:
+            # check for newest:
+            old_house = thisZC[house.block_lot]
+            if house.year >  old_house.year:
+                thisZC[house.block_lot] = house
+
+
+    def printMaxClassFraction(self):
+        max_v = 0
+        max_k = None
+        total = 0
+        for k,v in self.cc.iteritems():
+            if v > max_v:
+                max_v = v
+                max_k = k
+            total += v
+
+        print "Max Class [{}] Total [{}] Max Class Frequency [{}] Percentage [{}]".format(max_k, total, max_v, (float(max_v)/total))
+
+    def printAssessedValue(self):
+        l = list()
+
+        for k,home in self.block_lot.iteritems():
+            l.append(home.assessed_improvement_value)
+
+        print "Number of houses with improvements {} Median {} ".format(len(self.block_lot), numpy.median(numpy.array(l)))
+
+    def printNeighborhoodAssessedValue(self):
+        print "number of neighborhoods with houses having assessed improved value {}".format( len(self.nc) )
+        min = -1
+        min_n = None
+        max = 0
+        max_n = None
+        for neighborhood, houses in self.nc.iteritems():
+            total = 0
+            for k, house in houses.iteritems():
+                total += house.assessed_improvement_value
+            avg = float(total) / len(houses) if total > 0 else 0
+            if avg > max:
+                max = avg
+                max_n = neighborhood
+            if min == -1 or avg < min:
+                min = avg
+                min_n = neighborhood
+            if DEBUG:
+                print "neighborhood {} average assessed value {} ".format(neighborhood, avg)
+
+        print "maximum neighborhood [{}] max val {}".format(max_n, max)
+        print "minimum neighborhood [{}] min val {}".format(min_n, min)
+
+        if DEBUG:
+            houses = self.nc[max_n]
+            print "number of houses in [{}] is [{}]".format(max_n, len(self.nc[max_n]))
+            l = []
+            for k,house in houses.iteritems():
+                l.append(house.assessed_improvement_value)
+            print l
+
+    def printLandValuesGrowth(self):
+        print "land values"
+        min = -1
+        max = 0
+        for year,value in self.landValues.iteritems():
+            # print year, value
+            if value[1] == 0:
+                continue
+            avg = float(value[0]) / value[1]
+            if avg > max:
+                max = avg
+                maxyear = year
+            if min == -1 or avg < min:
+                min = avg
+                minyear = year
+
+        print "min [{}] minyear [{}] max [{}] maxyear [{}]".format(min, minyear, max, maxyear)
+        if (maxyear-minyear) > 0:
+            print "growth rate is {}".format ( (math.log(max/min)) / (maxyear - minyear) )
+
+    def printUnits1950(self):
+        before_avg = 0.0
+        before_total = 0;
+        after_avg = 0.0
+        after_total = 0
+        for year, houses in self._1950.iteritems():
+            units = 0
+            total = 0
+            for k, house in houses.iteritems():
+                if house.units > 0:
+                    units += house.units
+                    total += 1
+            if year == "before1950":
+                before_avg = float(units) / total
+                before_total = total
+            else:
+                after_avg = float(units) / total
+                after_total = total
+
+        print "Before - all houses {} units > 0 {} avg = {} ".format(
+            len(self._1950["before1950"]), before_total, before_avg )
+        print "After - all houses {} units > 0 {} avg = {} ".format(
+            len(self._1950["after1950"]), after_total, after_avg )
+
+    def printBedroomsUnits(self):
+        l = []
+        for zipcode,houses in self.bu.iteritems():
+            bedrooms = 0
+            units = 0
+            count = 0
+            for k, house in houses.iteritems():
+                if house.units > 0 and house.bedrooms > 0:
+                    bedrooms += house.bedrooms
+                    units += house.units
+                    count += 1
+
+            if units == 0:
+                print "zero units for zipcode {}".format(zipcode)
+                continue
+
+            bedrooms_mean = float(bedrooms) / count
+            units_mean = float(units) / count
+
+            # print "zipcode [{}] Ratio [{}]".format(zipcode, bedrooms_mean/units_mean)
+            l.append(bedrooms_mean/units_mean)
+
+        print "Maxiumum Bedroom to Unit Ratio [{}]".format(numpy.max(numpy.array(l)))
+
+    def printBuiltUp(self):
+        max = 0
+        max_zipcode = 0
+        for zipcode, houses in self.bu.iteritems():
+            current = 0
+            lot_area  = 0.0
+            prop_area = 0.0
+            for k, house in houses.iteritems():
+                lot_area += house.lot_area
+                prop_area += house.prop_area
+
+            current = prop_area / lot_area
+            # print "zipcode {} ratio {}".format(zipcode, current)
+            if current > max:
+                max = current
+                max_zipcode = zipcode
+
+        print "Maximum Builtout [{}] in zipcode [{}]".format(max, max_zipcode)
+        if DEBUG:
+            print "some sample houses:"
+            for k, house in self.bu[max_zipcode].iteritems():
+                print "prop area {} lot area {}".format(house.prop_area, house.lot_area)
+
+
+def main():
+    sfh = SFHouses()
+
+    sfh.readFile('Historic_Secured_Property_Tax_Rolls.csv')
+    # sfh.readFile('data_10000.csv')
+    # sfh.readFile('data_100.csv')
+
+    if len(sfh.houses) == 0:
+        print "no houses!"
+        return
+
+    sfh.printMaxClassFraction()
+    sfh.printAssessedValue()
+    sfh.printNeighborhoodAssessedValue()
+    sfh.printLandValuesGrowth()
+    sfh.printUnits1950()
+    sfh.printBedroomsUnits()
+    sfh.printBuiltUp()
+
+
+if __name__ =="__main__":
+    main()
+
